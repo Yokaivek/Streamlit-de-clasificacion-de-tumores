@@ -1,8 +1,9 @@
 import streamlit as st
-import requests
 from PIL import Image
 import pandas as pd
 import numpy as np
+import tensorflow as tf
+from pathlib import Path
 
 # ===========================
 # CONFIGURACIÓN GENERAL
@@ -13,7 +14,36 @@ st.set_page_config(
     layout="wide",
 )
 
-API_URL = "https://clasificaci-n-de-tumores-con-cnn-production.up.railway.app/predict"
+# ===========================
+# CARGAR MODELO
+# ===========================
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "model_0.904.keras"
+
+@st.cache_resource
+def load_model():
+    return tf.keras.models.load_model(MODEL_PATH)
+
+model = load_model()
+
+# Clases del modelo
+class_names = ["Glioma", "Meningioma", "No Tumor", "Pituitary"]
+IMG_SIZE = (224, 224)
+
+# ===========================
+# FUNCIÓN DE PREDICCIÓN
+# ===========================
+def predict(image: Image.Image):
+    """Realiza predicción usando el modelo Keras local"""
+    image = image.resize(IMG_SIZE)
+    img_array = np.array(image) / 255.0
+    img_array = np.expand_dims(img_array, axis=0)
+    
+    preds = model.predict(img_array, verbose=0)[0]  # vector de 4 probabilidades
+    idx = np.argmax(preds)
+    
+    prob_dict = {class_names[i]: float(preds[i]) for i in range(len(class_names))}
+    return class_names[idx], float(preds[idx]), prob_dict
 
 # ===========================
 # ESTILOS PROFESIONALES
@@ -117,23 +147,13 @@ with col2:
             st.warning("🔽 Por favor sube una imagen primero.")
         else:
             with st.spinner("Analizando imagen con la red neuronal..."):
-                files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "image/jpeg")}
                 try:
-                    response = requests.post(API_URL, files=files, timeout=30)
-                except requests.exceptions.RequestException as e:
-                    st.error(f"Error de conexión con la API: {e}")
-                    response = None
-
-                if response and response.status_code == 200:
-                    data = response.json()
-
-                    prediction = data.get("prediction", "N/A")
-                    confidence = data.get("confidence", 0) * 100  # porcentaje
-                    probs = data.get("probabilities", None)  # dict esperado
-
+                    img = Image.open(uploaded_file).convert("RGB")
+                    prediction, confidence, probs = predict(img)
+                    
                     # Resultado principal
                     st.markdown(f"<div class='badge'>{prediction}</div>", unsafe_allow_html=True)
-                    st.markdown(f"**Confianza:** <b style='color:#0a4da3'>{confidence:.2f}%</b>", unsafe_allow_html=True)
+                    st.markdown(f"**Confianza:** <b style='color:#0a4da3'>{confidence * 100:.2f}%</b>", unsafe_allow_html=True)
                     st.markdown("---")
 
                     # TABLA de probabilidades (ordenada desc)
@@ -154,11 +174,10 @@ with col2:
                         st.bar_chart(chart_df)
 
                     else:
-                        st.info("No se devolvieron probabilidades detalladas desde la API.")
+                        st.info("No se devolvieron probabilidades detalladas.")
 
-                elif response:
-                    st.error(f"Error en la API (status {response.status_code}).")
-                # else el error ya fue mostrado
+                except Exception as e:
+                    st.error(f"Error al analizar la imagen: {e}")
 
     st.markdown("</div>", unsafe_allow_html=True)
 
